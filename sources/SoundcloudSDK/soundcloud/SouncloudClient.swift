@@ -205,20 +205,15 @@ extension Session {
     - parameter completion: The closure that will be called when the profile is loaded or upon error
     */
     public func me(completion: @escaping (SimpleAPIResponse<User>) -> Void) {
-        guard let clientIdentifier = SoundcloudClient.clientIdentifier else {
-            completion(SimpleAPIResponse(error: .credentialsNotSet))
-            return
-        }
-
         guard let oauthToken = accessToken else {
             completion(SimpleAPIResponse(error: .needsLogin))
             return
         }
 
         let url = URL(string: "https://api.soundcloud.com/me")!
-        let parameters = ["client_id": clientIdentifier, "oauth_token": oauthToken]
+        let headers = ["Authorization": "OAuth \(oauthToken)"]
 
-        let request = Request(url: url, method: .get, parameters: parameters, parse: {
+        let request = Request(url: url, method: .get, parameters: nil, headers: headers, parse: {
             if let user = User(JSON: $0) {
                 return .success(user)
             }
@@ -237,18 +232,15 @@ extension Session {
      - parameter completion: The closure that will be called when the activities are loaded or upon error
      */
     public func activities(completion: @escaping (PaginatedAPIResponse<Activity>) -> Void) {
-        guard let clientIdentifier = SoundcloudClient.clientIdentifier else {
-            completion(PaginatedAPIResponse(error: .credentialsNotSet))
-            return
-        }
-
         guard let oauthToken = accessToken else {
             completion(PaginatedAPIResponse(error: .needsLogin))
             return
         }
 
         let url = URL(string: "https://api.soundcloud.com/me/activities")!
-        let parameters = ["client_id": clientIdentifier, "oauth_token": oauthToken, "linked_partitioning": "true"]
+        let headers = ["Authorization": "OAuth \(oauthToken)"]
+        
+        let parameters = ["linked_partitioning": "true"]
 
         let parse = { (JSON: JSONObject) -> Result<[Activity], SoundcloudError> in
             guard let activities = JSON.flatMap(transform: { Activity(JSON: $0) }) else {
@@ -257,7 +249,7 @@ extension Session {
             return .success(activities)
         }
 
-        let request = Request(url: url, method: .get, parameters: parameters, parse: { JSON -> Result<PaginatedAPIResponse<Activity>, SoundcloudError> in
+        let request = Request(url: url, method: .get, parameters: parameters, headers: headers, parse: { JSON -> Result<PaginatedAPIResponse<Activity>, SoundcloudError> in
             return .success(PaginatedAPIResponse(JSON: JSON, parse: parse))
         }) { result in
             completion(result.recover { PaginatedAPIResponse(error: $0) })
@@ -430,7 +422,7 @@ public class SoundcloudClient: NSObject {
             web.title = "Soundcloud"
             web.preferredContentSize = displayViewController.view.bounds.size
 
-            displayViewController.presentAsSheet(web)
+            displayViewController.presentViewControllerAsSheet(web)
         #else
             web.navigationItem.title = "Soundcloud"
 
