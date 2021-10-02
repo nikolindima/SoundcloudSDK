@@ -8,7 +8,7 @@
 
 import Foundation
 
-extension Track {
+public extension Track {
     static let BaseURL = URL(string: "https://api.soundcloud.com/tracks")!
 
     /**
@@ -18,16 +18,16 @@ extension Track {
      - parameter completion: The closure that will be called when track is loaded or upon error
      */
     @discardableResult
-    public static func track(identifier: Int, completion: @escaping (SimpleAPIResponse<Track>) -> Void) -> CancelableOperation? {
-        guard let clientIdentifier = SoundcloudClient.clientIdentifier else {
-            completion(SimpleAPIResponse(error: .credentialsNotSet))
+    static func track(identifier: Int, completion: @escaping (SimpleAPIResponse<Track>) -> Void) -> CancelableOperation? {
+        guard let oauthToken = SoundcloudClient.session?.accessToken else {
+            completion(SimpleAPIResponse(error: .needsLogin))
             return nil
         }
-
-        let url = BaseURL.appendingPathComponent("\(identifier).json")
-        let parameters = ["client_id": clientIdentifier]
-
-        let request = Request(url: url, method: .get, parameters: parameters, parse: {
+        
+        let url = BaseURL.appendingPathComponent("\(identifier)")
+        let headers = ["Authorization" : "OAuth \(oauthToken)"]
+        
+        let request = Request(url: url, method: .get, parameters: nil, headers: headers, parse: {
             if let track = Track(JSON: $0) {
                 return .success(track)
             }
@@ -46,14 +46,14 @@ extension Track {
      - parameter completion:  The closure that will be called when tracks are loaded or upon error
      */
     @discardableResult
-    public static func tracks(identifiers: [Int], completion: @escaping (SimpleAPIResponse<[Track]>) -> Void) -> CancelableOperation? {
-        guard let clientIdentifier = SoundcloudClient.clientIdentifier else {
-            completion(SimpleAPIResponse(error: .credentialsNotSet))
+    static func tracks(identifiers: [Int], completion: @escaping (SimpleAPIResponse<[Track]>) -> Void) -> CancelableOperation? {
+        guard let oauthToken = SoundcloudClient.session?.accessToken else {
+            completion(SimpleAPIResponse(error: .needsLogin))
             return nil
         }
-
-        let parameters = ["client_id": clientIdentifier, "ids": identifiers.map { "\($0)" }.joined(separator: ",")]
-        let request = Request(url: BaseURL, method: .get, parameters: parameters, parse: {
+        let headers = ["Authorization" : "OAuth \(oauthToken)"]
+        let parameters = ["ids": identifiers.map { "\($0)" }.joined(separator: ",")]
+        let request = Request(url: BaseURL, method: .get, parameters: parameters, headers: headers, parse: {
             guard let tracks = $0.flatMap(transform: { Track(JSON: $0) }) else {
                 return .failure(.parsing)
             }
@@ -72,26 +72,50 @@ extension Track {
      - parameter completion: The closure that will be called when tracks are loaded or upon error
      */
     @discardableResult
-    public static func search(queries: [SearchQueryOptions], completion: @escaping (PaginatedAPIResponse<Track>) -> Void) -> CancelableOperation? {
-        guard let clientIdentifier = SoundcloudClient.clientIdentifier else {
-            completion(PaginatedAPIResponse(error: .credentialsNotSet))
+    static func search(queries: [SearchQueryOptions], completion: @escaping (PaginatedAPIResponse<Track>) -> Void) -> CancelableOperation? {
+        guard let oauthToken = SoundcloudClient.session?.accessToken else {
+            completion(PaginatedAPIResponse(error: .needsLogin))
             return nil
         }
-
+        
         let parse = { (JSON: JSONObject) -> Result<[Track], SoundcloudError> in
             guard let tracks = JSON.flatMap(transform: { Track(JSON: $0) }) else {
                 return .failure(.parsing)
             }
             return .success(tracks)
         }
-
-        var parameters = ["client_id": clientIdentifier, "linked_partitioning": "true"]
+        
+        let headers = ["Authorization" : "OAuth \(oauthToken)"]
+        var parameters = ["linked_partitioning": "true"]
         queries.map { $0.query }.forEach { parameters[$0.0] = $0.1 }
 
-        let request = Request(url: BaseURL, method: .get, parameters: parameters, parse: { JSON -> Result<PaginatedAPIResponse<Track>, SoundcloudError> in
+        let request = Request(url: BaseURL, method: .get, parameters: parameters, headers: headers, parse: { JSON -> Result<PaginatedAPIResponse<Track>, SoundcloudError> in
             return .success(PaginatedAPIResponse(JSON: JSON, parse: parse))
         }) { result in
             completion(result.recover { PaginatedAPIResponse(error: $0) })
+        }
+        request.start()
+        return request
+    }
+    
+    @discardableResult
+    static func getPlayableUrl(identifier: Int,completion: @escaping (SimpleAPIResponse<URL>) -> Void) -> CancelableOperation? {
+        guard let oauthToken = SoundcloudClient.session?.accessToken else {
+            completion(SimpleAPIResponse(error: .needsLogin))
+            return nil
+        }
+        
+        let url = BaseURL.appendingPathComponent("\(identifier)/streams")
+        let headers = ["Authorization" : "OAuth \(oauthToken)"]
+        
+        let request = Request(url: url, method: .get, parameters: nil, headers: headers, parse: {
+            guard let string = $0["http_mp3_128_url"].stringValue, let url = URL(string: string) else {
+                return .failure(.parsing)
+            }
+            
+            return .success(url)
+        }) { result in
+            completion(SimpleAPIResponse(result: result))
         }
         request.start()
         return request
@@ -104,12 +128,11 @@ extension Track {
      - parameter completion:      The closure that will be called when the comments are loaded or upon error
      */
     @discardableResult
-    public static func comments(on trackIdentifier: Int, completion: @escaping (PaginatedAPIResponse<Comment>) -> Void) -> CancelableOperation? {
-        guard let clientIdentifier = SoundcloudClient.clientIdentifier else {
-            completion(PaginatedAPIResponse(error: .credentialsNotSet))
+    static func comments(on trackIdentifier: Int, completion: @escaping (PaginatedAPIResponse<Comment>) -> Void) -> CancelableOperation? {
+        guard let oauthToken = SoundcloudClient.session?.accessToken else {
+            completion(PaginatedAPIResponse(error: .needsLogin))
             return nil
         }
-
         let parse = { (JSON: JSONObject) -> Result<[Comment], SoundcloudError> in
             guard let comments = JSON.flatMap(transform: { Comment(JSON: $0) }) else {
                 return .failure(.parsing)
@@ -117,10 +140,12 @@ extension Track {
             return .success(comments)
         }
 
-        let url = BaseURL.appendingPathComponent("\(trackIdentifier)/comments.json")
-        let parameters = ["client_id": clientIdentifier, "linked_partitioning": "true"]
+        
+        let url = BaseURL.appendingPathComponent("\(trackIdentifier)/comments")
+        let parameters = ["linked_partitioning": "true"]
+        let headers = ["Authorization" : "OAuth \(oauthToken)"]
 
-        let request = Request(url: url, method: .get, parameters: parameters, parse: { JSON -> Result<PaginatedAPIResponse<Comment>, SoundcloudError> in
+        let request = Request(url: url, method: .get, parameters: parameters, headers: headers, parse: { JSON -> Result<PaginatedAPIResponse<Comment>, SoundcloudError> in
             return .success(PaginatedAPIResponse(JSON: JSON, parse: parse))
         }) { result in
             completion(result.recover { PaginatedAPIResponse(error: $0) })
@@ -135,7 +160,7 @@ extension Track {
      - parameter completion: The closure that will be called when the comments are loaded or upon error
      */
     @discardableResult
-    public func comments(completion: @escaping (PaginatedAPIResponse<Comment>) -> Void) -> CancelableOperation? {
+    func comments(completion: @escaping (PaginatedAPIResponse<Comment>) -> Void) -> CancelableOperation? {
         return Track.comments(on: identifier, completion: completion)
     }
 
@@ -151,38 +176,34 @@ extension Track {
      */
     @discardableResult
     @available(tvOS, unavailable)
-    public static func comment(on trackIdentifier: Int, body: String, timestamp: TimeInterval, completion: @escaping (SimpleAPIResponse<Comment>) -> Void) -> CancelableOperation? {
-        #if !os(tvOS)
-            guard let clientIdentifier = SoundcloudClient.clientIdentifier else {
-                completion(SimpleAPIResponse(error: .credentialsNotSet))
-                return nil
-            }
-
-            guard let oauthToken = SoundcloudClient.session?.accessToken else {
-                completion(SimpleAPIResponse(error: .needsLogin))
-                return nil
-            }
-
-            let url = BaseURL.appendingPathComponent("\(trackIdentifier)/comments.json")
-            let parameters = [
-                "client_id": clientIdentifier,
-                "comment[body]": body,
-                "comment[timestamp]": "\(timestamp)",
-                "oauth_token": oauthToken]
-
-            let request = Request(url: url, method: .post, parameters: parameters, parse: {
-                if let comments = Comment(JSON: $0) {
-                    return .success(comments)
-                }
-                return .failure(.parsing)
-            }) { result in
-                completion(SimpleAPIResponse(result: result))
-            }
-            request.start()
-            return request
-        #else
+    static func comment(on trackIdentifier: Int, body: String, timestamp: TimeInterval, completion: @escaping (SimpleAPIResponse<Comment>) -> Void) -> CancelableOperation? {
+#if !os(tvOS)
+        
+        guard let oauthToken = SoundcloudClient.session?.accessToken else {
+            completion(SimpleAPIResponse(error: .needsLogin))
             return nil
-        #endif
+        }
+        
+        let url = BaseURL.appendingPathComponent("\(trackIdentifier)/comments")
+        let parameters = [
+            "comment[body]": body,
+            "comment[timestamp]": "\(timestamp)"
+        ]
+        let headers = ["Authorization" : "OAuth \(oauthToken)"]
+        
+        let request = Request(url: url, method: .post, parameters: parameters, headers: headers, parse: {
+            if let comments = Comment(JSON: $0) {
+                return .success(comments)
+            }
+            return .failure(.parsing)
+        }) { result in
+            completion(SimpleAPIResponse(result: result))
+        }
+        request.start()
+        return request
+#else
+        return nil
+#endif
     }
 
     /**
@@ -196,7 +217,7 @@ extension Track {
      */
     @discardableResult
     @available(tvOS, unavailable)
-    public func comment(body: String, timestamp: TimeInterval, completion: @escaping (SimpleAPIResponse<Comment>) -> Void) -> CancelableOperation? {
+    func comment(body: String, timestamp: TimeInterval, completion: @escaping (SimpleAPIResponse<Comment>) -> Void) -> CancelableOperation? {
         #if !os(tvOS)
             return Track.comment(on: identifier, body: body, timestamp: timestamp, completion: completion)
         #else
@@ -211,14 +232,16 @@ extension Track {
      - parameter completion:      The closure that will be called when users are loaded or upon error
      */
     @discardableResult
-    public static func favoriters(of trackIdentifier: Int, completion: @escaping (PaginatedAPIResponse<User>) -> Void) -> CancelableOperation? {
-        guard let clientIdentifier = SoundcloudClient.clientIdentifier else {
-            completion(PaginatedAPIResponse(error: .credentialsNotSet))
+    static func favoriters(of trackIdentifier: Int, completion: @escaping (PaginatedAPIResponse<User>) -> Void) -> CancelableOperation? {
+        guard let oauthToken = SoundcloudClient.session?.accessToken else {
+            completion(PaginatedAPIResponse(error: .needsLogin))
             return nil
         }
-
-        let url = BaseURL.appendingPathComponent("\(trackIdentifier)/favoriters.json")
-        let parameters = ["client_id": clientIdentifier, "linked_partitioning": "true"]
+        
+        let url = BaseURL.appendingPathComponent("\(trackIdentifier)/favoriters")
+        let parameters = ["linked_partitioning": "true"]
+        let headers = ["Authorization" : "OAuth \(oauthToken)"]
+        
 
         let parse = { (JSON: JSONObject) -> Result<[User], SoundcloudError> in
             guard let users = JSON.flatMap(transform: { User(JSON: $0) }) else {
@@ -227,7 +250,7 @@ extension Track {
             return .success(users)
         }
 
-        let request = Request(url: url, method: .get, parameters: parameters, parse: { JSON -> Result<PaginatedAPIResponse<User>, SoundcloudError> in
+        let request = Request(url: url, method: .get, parameters: parameters, headers: headers, parse: { JSON -> Result<PaginatedAPIResponse<User>, SoundcloudError> in
             return .success(PaginatedAPIResponse(JSON: JSON, parse: parse))
         }) { result in
             completion(result.recover { PaginatedAPIResponse(error: $0) })
@@ -242,7 +265,7 @@ extension Track {
      - parameter completion: The closure that will be called when users are loaded or upon error
      */
     @discardableResult
-    public func favoriters(completion: @escaping (PaginatedAPIResponse<User>) -> Void) -> CancelableOperation? {
+    func favoriters(completion: @escaping (PaginatedAPIResponse<User>) -> Void) -> CancelableOperation? {
         return Track.favoriters(of: identifier, completion: completion)
     }
 
@@ -256,7 +279,7 @@ extension Track {
      */
     @discardableResult
     @available(tvOS, unavailable)
-    public static func favorite(trackIdentifier: Int, completion: @escaping (SimpleAPIResponse<Bool>) -> Void) -> CancelableOperation? {
+    static func favorite(trackIdentifier: Int, completion: @escaping (SimpleAPIResponse<Bool>) -> Void) -> CancelableOperation? {
         #if !os(tvOS)
             return Track.changeFavoriteStatus(of: trackIdentifier, favorite: true, completion: completion)
         #else
@@ -319,31 +342,25 @@ extension Track {
     @available(tvOS, unavailable)
     private static func changeFavoriteStatus(of trackIdentifier: Int, favorite: Bool, completion: @escaping (SimpleAPIResponse<Bool>) -> Void) -> CancelableOperation? {
         #if !os(tvOS)
-            guard let clientIdentifier = SoundcloudClient.clientIdentifier else {
-                completion(SimpleAPIResponse(error: .credentialsNotSet))
-                return nil
-            }
-
-            guard let oauthToken = SoundcloudClient.session?.accessToken else {
-                completion(SimpleAPIResponse(error: .needsLogin))
-                return nil
-            }
-
-            let parameters = ["client_id": clientIdentifier, "oauth_token": oauthToken]
-            let url = User.BaseURL
-                .appendingPathComponent("me/favorites/\(trackIdentifier).json")
-                .appendingQueryString(parameters.queryString)
-
-            let request = Request(url: url, method: favorite ? .put : .delete, parameters: nil, parse: { _ in
-                return .success(true)
-            }) { result in
-                completion(SimpleAPIResponse(result: result))
-            }
-            request.start()
-            return request
-        #else
+        guard let oauthToken = SoundcloudClient.session?.accessToken else {
+            completion(SimpleAPIResponse(error: .needsLogin))
             return nil
-        #endif
+        }
+        
+        let url = URL(string: "https://api.soundcloud.com/likes/tracks/\(trackIdentifier)")!
+        
+        let headers = ["Authorization" : "OAuth \(oauthToken)"]
+        
+        let request = Request(url: url, method: favorite ? .put : .delete, parameters: nil, headers: headers, parse: { _ in
+            return .success(true)
+        }) { result in
+            completion(SimpleAPIResponse(result: result))
+        }
+        request.start()
+        return request
+#else
+        return nil
+#endif
     }
 
     /**
@@ -353,16 +370,16 @@ extension Track {
      - parameter completion: The closure that will be called when tracks are loaded or upon error
      */
     @discardableResult
-    public static func relatedTracks(identifier: Int, completion: @escaping (SimpleAPIResponse<[Track]>) -> Void) -> CancelableOperation? {
-        guard let clientIdentifier = SoundcloudClient.clientIdentifier else {
-            completion(SimpleAPIResponse(error: .credentialsNotSet))
+    static func relatedTracks(identifier: Int, completion: @escaping (SimpleAPIResponse<[Track]>) -> Void) -> CancelableOperation? {
+        guard let oauthToken = SoundcloudClient.session?.accessToken else {
+            completion(SimpleAPIResponse(error: .needsLogin))
             return nil
         }
-
+        
         let url = BaseURL.appendingPathComponent("\(identifier)/related")
-        let parameters = ["client_id": clientIdentifier]
-
-        let request = Request(url: url, method: .get, parameters: parameters, parse: {
+        let headers = ["Authorization" : "OAuth \(oauthToken)"]
+        
+        let request = Request(url: url, method: .get, parameters: nil, headers: headers, parse: {
             guard let tracks = $0.flatMap(transform: { Track(JSON: $0) }) else {
                 return .failure(.parsing)
             }
